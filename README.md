@@ -65,6 +65,10 @@ streamlit run main.py
 3. Start chatting with your document using natural language queries
 4. View and manage chat history as needed
 
+## Demo Video
+
+![Demo Video](image/Demo.mp4)
+
 ## Screenshots
 
 Here are some screenshots showing the application in action:
