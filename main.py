@@ -1,6 +1,8 @@
 """
 PDF Chat Application with Grok Integration
 
+Copyright (c) 2024 Quan Nguyen. All rights reserved.
+
 This module implements a Streamlit-based chat application that allows users to interact with PDF documents
 using Grok AI. The application supports both text-based PDFs and scanned documents through OCR.
 
@@ -30,12 +32,6 @@ import pytesseract
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_google_genai import GoogleGenerativeAIEmbeddings
 from langchain.vectorstores import FAISS
-from dotenv import load_dotenv
-
-load_dotenv()
-GROK_API_KEY = os.getenv("GROK_API_KEY")
-GROK_ENDPOINT = os.getenv("GROK_ENDPOINT")  
-
 
 def extract_text_from_text_based_pdf(pdf_path):
     """
@@ -93,6 +89,7 @@ def extract_text_from_pdf(pdf_path):
     return text
 
 
+
 def get_text_chunks(text):
     """
     Split text into smaller chunks for processing.
@@ -119,31 +116,29 @@ def get_vector_store(chunks):
     vector_store = FAISS.from_texts(chunks, embedding=embeddings)
     vector_store.save_local("faiss_index")
 
-
 def query_grok(prompt, max_tokens=10000, temperature=0.0):
     """
-    Query the Grok API with a prompt.
+    Query Grok API with the given prompt.
     
     Args:
-        prompt (str): Input prompt for Grok
-        max_tokens (int, optional): Maximum tokens in response. Defaults to 10000
-        temperature (float, optional): Response randomness. Defaults to 0.0
-        
-    Returns:
-        str: Grok's response text
+        prompt (str): User's input prompt
+        max_tokens (int): Maximum number of tokens in the response
+        temperature (float): Temperature for response generation
     """
     headers = {
-        "Authorization": f"Bearer {GROK_API_KEY}",
+        "Authorization": f"Bearer {st.session_state['GROK_API_KEY']}",
         "Content-Type": "application/json",
     }
     payload = {
-        "model": "grok-beta", 
+        "model": "grok-beta",
         "prompt": prompt,
         "max_tokens": max_tokens,
         "temperature": temperature,
     }
     try:
-        response = requests.post(GROK_ENDPOINT, headers=headers, json=payload, timeout=30)
+        response = requests.post(
+            st.session_state['GROK_ENDPOINT'], headers=headers, json=payload, timeout=30
+        )
         response.raise_for_status()
         result = response.json()
         raw_text = result.get("choices", [{}])[0].get("text", "No response from Grok.")
@@ -151,7 +146,6 @@ def query_grok(prompt, max_tokens=10000, temperature=0.0):
     except requests.exceptions.RequestException as e:
         st.error(f"Error querying Grok API: {e}")
         return "Error querying Grok API."
-
 
 def clear_chat_history():
     """Reset the chat history to initial state."""
@@ -188,17 +182,69 @@ def user_input(user_question):
     return {"output_text": grok_response, "is_code": False}
 
 
+
+
+def set_api_key():
+    """Set the API key for Grok."""
+    st.sidebar.title("API Key Configuration")
+    api_key = st.sidebar.text_input("Enter Grok API Key:", type="password")
+    endpoint = st.sidebar.text_input(
+        "Enter Grok API Endpoint (default: https://api.x.ai/v1/completions):",
+        value="https://api.x.ai/v1/completions"
+    )
+
+    if api_key:
+        st.session_state["GROK_API_KEY"] = api_key
+    if endpoint:
+        st.session_state["GROK_ENDPOINT"] = endpoint
+    if st.sidebar.button("Validate API Key"):
+        if validate_api_key(api_key, endpoint):
+            st.sidebar.success("API Key is valid!")
+        else:
+            st.sidebar.error("Invalid API Key or Endpoint.")
+
+
+def validate_api_key(api_key, endpoint):
+    """Validate the API Key by making a test request."""
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+    payload = {
+        "model": "grok-beta",
+        "prompt": "Test API Key",
+        "max_tokens": 5,
+        "temperature": 0.0,
+    }
+
+    try:
+        response = requests.post(endpoint, headers=headers, json=payload, timeout=10)
+        response.raise_for_status()
+        return True 
+    except requests.exceptions.RequestException as e:
+        st.error(f"Error validating API Key: {e}")
+        return False
+
+
+def add_footer():
+    """Display copyright notice at the bottom of the app."""
+    st.markdown(
+        """
+        ---
+        <div style="text-align: center;">
+            © 2024 Quan Nguyen. All Rights Reserved.
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
 def main():
-    """
-    Main function to run the Streamlit application.
-    
-    Handles:
-    - Page configuration
-    - PDF file upload and processing
-    - Chat interface
-    - Message history management
-    """
-    st.set_page_config(page_title="PDF Chatbot", page_icon="🤖")
+    st.set_page_config(page_title="Grok PDF Chatbot", page_icon="🤖")
+    set_api_key()
+    if "GROK_API_KEY" not in st.session_state or not st.session_state["GROK_API_KEY"]:
+        st.error("Please enter your API Key in the sidebar to proceed.")
+        return
 
     with st.sidebar:
         st.title("Menu")
@@ -210,15 +256,17 @@ def main():
                 raw_text = ""
                 for pdf in pdf_docs:
                     try:
-                        extracted_text = extract_text_from_pdf(pdf)
-                        raw_text += extracted_text
+                        
+                        raw_text += extract_text_from_pdf(pdf)
                     except Exception as e:
                         st.error(f"Failed to process {pdf.name}. Error: {e}")
                 text_chunks = get_text_chunks(raw_text)
                 get_vector_store(text_chunks)
                 st.success("PDF processing complete!")
+        st.button("Clear Chat History", on_click=clear_chat_history)
 
     st.title("Chat with PDF files 🤖")
+
     if "messages" not in st.session_state:
         clear_chat_history()
 
@@ -227,16 +275,33 @@ def main():
             st.write(message["content"])
 
     if prompt := st.chat_input("Type your question here..."):
+
         st.session_state.messages.append({"role": "user", "content": prompt})
         with st.chat_message("user"):
             st.write(prompt)
+
+
         with st.chat_message("assistant"):
             with st.spinner("Thinking..."):
                 response = user_input(prompt)
                 full_response = response["output_text"]
-                st.markdown(full_response)
+
+
+                if response["is_code"]:
+                    st.markdown("### Code Block:")
+                    st.code(full_response, language="python")
+                    st.download_button(
+                        label="Copy Code",
+                        data=full_response,
+                        file_name="code_snippet.py",
+                        mime="text/plain"
+                    )
+                else:
+                    st.markdown(full_response)
+
         st.session_state.messages.append({"role": "assistant", "content": full_response})
 
+    add_footer()
 
 if __name__ == "__main__":
     main()
