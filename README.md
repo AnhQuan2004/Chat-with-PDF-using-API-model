@@ -33,7 +33,16 @@ cd Chat-with-PDF-using-API-model
 ```bash
 pip install -r requirements.txt
 ```
-4. Start streamlit app:
+4. Set up environment variables:
+```bash
+export GROK_API_KEY="your_grok_api_key"
+```
+5. Start streamlit app:
 ```bash
 streamlit run main.py
 ```
+## Screenshots
+![App Screenshot](image/Screenshot%202024-11-19%20214246.png)
+![App Screenshot](image/Screenshot%202024-11-19%20214253.png)
+![App Screenshot](image/Screenshot%202024-11-19%20214259.png)
+![App Screenshot](image/Screenshot%202024-11-19%20215030.png)
