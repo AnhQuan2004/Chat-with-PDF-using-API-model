@@ -67,8 +67,8 @@ streamlit run main.py
 
 ## Demo Video
 
-![Demo Video](image/Demo.mp4)
 
+[![Demo Video](https://img.youtube.com/vi/XSuvMuEx5EU/maxresdefault.jpg)](https://www.youtube.com/watch?v=XSuvMuEx5EU)
 ## Screenshots
 
 Here are some screenshots showing the application in action:
