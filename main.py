@@ -1,16 +1,16 @@
 """
-PDF Chat Application with Grok Integration
+# PDF Chat Application with Grok Integration
 
-This module implements a Streamlit-based chat application that allows users to interact with PDF documents
-using Grok AI. The application supports both text-based PDFs and scanned documents through OCR.
+# This module implements a Streamlit-based chat application that allows users to interact with PDF documents
+# using Grok AI. The application supports both text-based PDFs and scanned documents through OCR.
 
-Key Features:
-- PDF text extraction (both native text and OCR)
-- Text chunking and vector storage
-- Conversational interface with Grok AI
-- Document context-aware responses
-- Chat history management
-"""
+# Key Features:
+# - PDF text extraction (both native text and OCR)
+# - Text chunking and vector storage
+# - Conversational interface with Grok AI
+# - Document context-aware responses
+# - Chat history management
+# """
 
 import os
 import requests
@@ -25,6 +25,7 @@ from dotenv import load_dotenv
 import camelot
 import google.generativeai as genai
 import cv2
+from docx import Document
 
 load_dotenv()
 GROK_API_KEY = os.getenv("GROK_API_KEY")
@@ -63,6 +64,34 @@ def get_pdf_text(pdf_docs):
         for page in pdf_reader.pages:
             text += page.extract_text()
     return text
+
+def extract_text_from_docx(docx_file):
+    """
+    Extract text from a DOCX file.
+    
+    Args:
+        docx_file: DOCX file object
+        
+    Returns:
+        str: Extracted text content
+    """
+    doc = Document(docx_file)
+    text = ""
+    for paragraph in doc.paragraphs:
+        text += paragraph.text + "\n"
+    return text
+
+def extract_text_from_txt(txt_file):
+    """
+    Extract text from a TXT file.
+    
+    Args:
+        txt_file: TXT file object
+        
+    Returns:
+        str: Extracted text content
+    """
+    return txt_file.read().decode("utf-8")
 
 def extract_tables_from_pdf(pdf_file):
     """
@@ -141,7 +170,7 @@ def clear_chat_history():
     Reset the chat history to initial state.
     """
     st.session_state.messages = [
-        {"role": "assistant", "content": "Upload some PDFs and ask me a question."}
+        {"role": "assistant", "content": "Upload your files (PDF, DOCX, TXT) and ask me a question."}
     ]
 
 
@@ -186,33 +215,41 @@ def main():
     
     Handles:
     - Page configuration
-    - PDF file upload and processing
+    - File upload and processing
     - Chat interface
     - Message history management
     """
-    st.set_page_config(page_title="Grok PDF Chatbot", page_icon="🤖")
-
+    st.set_page_config(page_title="Grok Document Chatbot", page_icon="🤖")
 
     with st.sidebar:
         st.title("Menu")
-        pdf_docs = st.file_uploader(
-            "Upload your PDF Files", accept_multiple_files=True
+        uploaded_files = st.file_uploader(
+            "Upload your Files (PDF, DOCX, TXT)", 
+            accept_multiple_files=True,
+            type=["pdf", "docx", "txt"]
         )
         if st.button("Submit & Process"):
             with st.spinner("Processing..."):
                 raw_text = ""
-                for pdf in pdf_docs:
-                    try:
-                        raw_text += get_pdf_text([pdf]) 
-                    except:
-                        raw_text += extract_text_from_scanned_pdf(pdf) 
+                for uploaded_file in uploaded_files:
+                    file_type = uploaded_file.name.split(".")[-1].lower()
+                    if file_type == "pdf":
+                        try:
+                            raw_text += get_pdf_text([uploaded_file])
+                        except:
+                            raw_text += extract_text_from_scanned_pdf(uploaded_file)
+                    elif file_type == "docx":
+                        raw_text += extract_text_from_docx(uploaded_file)
+                    elif file_type == "txt":
+                        raw_text += extract_text_from_txt(uploaded_file)
+                    else:
+                        st.warning(f"Unsupported file type: {file_type}")
                 text_chunks = get_text_chunks(raw_text)
                 get_vector_store(text_chunks)
-                st.success("PDF processing complete!")
+                st.success("File processing complete!")
         st.button("Clear Chat History", on_click=clear_chat_history)
 
-    st.title("Chat with PDF files using Grok 🤖")
-
+    st.title("Chat with Files (PDF, DOCX, TXT) 🤖")
 
     if "messages" not in st.session_state:
         clear_chat_history()
@@ -222,17 +259,14 @@ def main():
             st.write(message["content"])
 
     if prompt := st.chat_input("Type your question here..."):
-
         st.session_state.messages.append({"role": "user", "content": prompt})
         with st.chat_message("user"):
             st.write(prompt)
-
 
         with st.chat_message("assistant"):
             with st.spinner("Thinking..."):
                 response = user_input(prompt)
                 full_response = response["output_text"]
-
 
                 if response["is_code"]:
                     st.markdown("### Code Block:")
@@ -251,3 +285,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

@@ -15,7 +15,7 @@ This application bridges the gap between static PDF documents and interactive AI
 
 ## Features
 
-- PDF text extraction (both native text and OCR support)
+- PDF, DOCX, TXT text extraction (both native text and OCR support)
 - Text chunking and vector storage for efficient retrieval
 - Conversational interface powered by Grok AI
 - Document context-aware responses
@@ -34,8 +34,7 @@ Before you begin, ensure you have:
 
 ## Installation
 
-1. Clone the repository:
-```bash
+1. Clone the repository:```bash
 git clone https://github.com/AnhQuan2004/Chat-with-PDF-using-API-model
 ```
 
