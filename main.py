@@ -11,10 +11,10 @@
 # - Document context-aware responses
 # - Chat history management
 # """
-
+import streamlit as st
+st.set_page_config(page_title="Grok Document Chatbot", page_icon="🤖")
 import os
 import requests
-import streamlit as st
 from PyPDF2 import PdfReader
 from pdf2image import convert_from_path
 import pytesseract
@@ -23,13 +23,13 @@ from langchain_google_genai import GoogleGenerativeAIEmbeddings
 from langchain.vectorstores import FAISS
 from dotenv import load_dotenv
 import camelot
-import google.generativeai as genai
-import cv2
+import json
 from docx import Document
 
 load_dotenv()
 GROK_API_KEY = os.getenv("GROK_API_KEY")
-GROK_ENDPOINT = os.getenv("GROK_ENDPOINT")  
+GROK_ENDPOINT = os.getenv("GROK_ENDPOINT")
+
 
 
 def extract_text_from_scanned_pdf(pdf_file):
@@ -120,16 +120,36 @@ def get_text_chunks(text):
     chunks = splitter.split_text(text)
     return chunks
 
-def get_vector_store(chunks):
-    """
-    Create and save a FAISS vector store from text chunks.
-    
-    Args:
-        chunks (list): List of text chunks to be embedded
-    """
+def process_all_files(uploaded_files):
+    raw_text = ""
+    for uploaded_file in uploaded_files:
+        file_type = uploaded_file.name.split(".")[-1].lower()
+        try:
+            if file_type == "pdf":
+                try:
+                    raw_text += get_pdf_text([uploaded_file])
+                except:
+                    raw_text += extract_text_from_scanned_pdf(uploaded_file)
+            elif file_type == "docx":
+                raw_text += extract_text_from_docx(uploaded_file)
+            elif file_type == "txt":
+                raw_text += extract_text_from_txt(uploaded_file)
+            else:
+                st.warning(f"Unsupported file type: {file_type}")
+        except Exception as e:
+            st.error(f"Error processing file {uploaded_file.name}: {e}")
+
+    if not raw_text.strip():
+        st.warning("No text extracted from uploaded files. Please check your files.")
+        return None
+
+    text_chunks = get_text_chunks(raw_text)
+    st.info("Text successfully split into chunks for processing.")
     embeddings = GoogleGenerativeAIEmbeddings(model="models/embedding-001")
-    vector_store = FAISS.from_texts(chunks, embedding=embeddings)
-    vector_store.save_local("faiss_index")
+    database = FAISS.from_texts(text_chunks, embedding=embeddings)
+    st.success("Vector database created successfully.")
+    return database
+
 
 def query_grok(prompt, max_tokens=10000, temperature=0.0):
     """
@@ -143,6 +163,7 @@ def query_grok(prompt, max_tokens=10000, temperature=0.0):
     Returns:
         str: Grok's response text
     """
+
     headers = {
         "Authorization": f"Bearer {GROK_API_KEY}",
         "Content-Type": "application/json",
@@ -173,54 +194,99 @@ def clear_chat_history():
         {"role": "assistant", "content": "Upload your files (PDF, DOCX, TXT) and ask me a question."}
     ]
 
-
-def user_input(user_question):
+def user_input(user_question, database, chat_history, threshold=0.7):
     """
     Process user input and generate a response using document context and Grok.
     
     Args:
         user_question (str): User's input question
+        vector_store (FAISS): FAISS vector store containing document embeddings
+        chat_history (list): Chat history
+        threshold (float): Minimum similarity score required to include a document in the context
         
     Returns:
-        dict: Response containing output text and code flag
+        dict: Response containing output text
     """
+    prompt_question_rewrite = f"""you are an AI assistant.
+
+    ##########
+    I have the user's input and chat history:
+    User's input: {user_question}\n\n
+    Chat history: \n {chat_history}\n\n
+
+    ##########
+    Your task is to rewrite the user's input in Vietnamese based on the chat history.
+    However, if the user's input is already sufficient and clear, there is no need to rewrite.
+
+    ##########
+    Constraints/Instruction:
+    - The rewritten question MUST be aligned with user's inputs.
+    ##########
+    Only give me the rewritten question in Vietnamese and nothing else.
+    """
+    rewritten_question = query_grok(prompt_question_rewrite, max_tokens=1000, temperature=0.0).strip()
+
     embeddings = GoogleGenerativeAIEmbeddings(model="models/embedding-001")
-    new_db = FAISS.load_local("faiss_index", embeddings, allow_dangerous_deserialization=True)
-    docs = new_db.similarity_search(user_question)
+    new_db = database
 
-    context = "\n".join([doc.page_content for doc in docs[:3]])
+    try:
+        docs_with_scores = new_db.similarity_search_with_score(rewritten_question)
+    except Exception as e:
+        st.error(f"Error retrieving similar documents: {e}")
+        return {"output_text": "Error retrieving documents."}
 
+    filtered_docs = [doc for doc, score in docs_with_scores if score >= threshold]
+    if not filtered_docs:
+        st.warning("No documents found matching the query.")
+        return {"output_text": "No relevant documents found."}
 
-    if not context.strip():
-        st.info("No document context found. Switching to general knowledge mode...")
-        general_prompt = f"Question: {user_question}\n\nAnswer as accurately as possible:"
+    context = "\n".join([doc.page_content for doc in filtered_docs])
+
+    prompt_review = f"""
+    Context: {context}
+    Question: {rewritten_question}
+
+    Determine if a database query is needed. If so, specify the database names. Otherwise, return 'no query needed'.
+
+    Response format (JSON):
+    {{
+        "review": "Summary of the question and purpose",
+        "status": "Database names if needed or 'no query needed'"
+    }}
+    """
+    review_response = query_grok(prompt_review, max_tokens=10000, temperature=0.0)
+
+    st.write("Debugging Grok response:", review_response) 
+
+    try:
+        review_data = json.loads(review_response)
+    except json.JSONDecodeError as e:
+        st.error(f"Error parsing review response. Response received: {review_response}. Error: {e}")
+        review_data = {"review": "Error parsing response.", "status": "no query needed"}
+
+    if review_data["status"] == "no query needed":
+        st.info("Review indicates no need to query database. Switching to general knowledge mode...")
+        general_prompt = f"Question: {rewritten_question}\n\nAnswer as accurately as possible:"
         general_response = query_grok(general_prompt, max_tokens=10000, temperature=0.0)
-        return {"output_text": general_response, "is_code": False}
+        return {"output_text": general_response}
 
-
-    prompt = f"Context:\n{context}\n\nQuestion:\n{user_question}\n\nAnswer:"
+    prompt = f"Context:\n{context}\n\nQuestion:\n{rewritten_question}\n\nAnswer:"
     grok_response = query_grok(prompt, max_tokens=10000, temperature=0.0)
 
+    return {"output_text": grok_response}
 
-    if "<code>" in grok_response and "</code>" in grok_response:
-        code_content = grok_response.split("<code>")[1].split("</code>")[0]
-        return {"output_text": code_content, "is_code": True}
-
-    return {"output_text": grok_response, "is_code": False}
 
 
 def main():
     """
     Main function to run the Streamlit application.
-    
     Handles:
     - Page configuration
     - File upload and processing
     - Chat interface
     - Message history management
     """
-    st.set_page_config(page_title="Grok Document Chatbot", page_icon="🤖")
-
+    vector_store = None 
     with st.sidebar:
         st.title("Menu")
         uploaded_files = st.file_uploader(
@@ -229,27 +295,15 @@ def main():
             type=["pdf", "docx", "txt"]
         )
         if st.button("Submit & Process"):
-            with st.spinner("Processing..."):
-                raw_text = ""
-                for uploaded_file in uploaded_files:
-                    file_type = uploaded_file.name.split(".")[-1].lower()
-                    if file_type == "pdf":
-                        try:
-                            raw_text += get_pdf_text([uploaded_file])
-                        except:
-                            raw_text += extract_text_from_scanned_pdf(uploaded_file)
-                    elif file_type == "docx":
-                        raw_text += extract_text_from_docx(uploaded_file)
-                    elif file_type == "txt":
-                        raw_text += extract_text_from_txt(uploaded_file)
-                    else:
-                        st.warning(f"Unsupported file type: {file_type}")
-                text_chunks = get_text_chunks(raw_text)
-                get_vector_store(text_chunks)
-                st.success("File processing complete!")
+            with st.spinner("Processing files..."):
+                vector_store = process_all_files(uploaded_files)
+                if vector_store:
+                    st.success("File processing complete and vector store is ready!")
+                else:
+                    st.warning("No valid content processed. Please upload proper files.")
         st.button("Clear Chat History", on_click=clear_chat_history)
 
-    st.title("Chat with Files (PDF, DOCX, TXT) 🤖")
+    st.title("Chat with Files 🤖")
 
     if "messages" not in st.session_state:
         clear_chat_history()
@@ -258,29 +312,29 @@ def main():
         with st.chat_message(message["role"]):
             st.write(message["content"])
 
+    if "chat_history" not in st.session_state:
+        st.session_state.chat_history = []
+
     if prompt := st.chat_input("Type your question here..."):
         st.session_state.messages.append({"role": "user", "content": prompt})
+        st.session_state.chat_history.append({"role": "user", "content": prompt})
+
         with st.chat_message("user"):
             st.write(prompt)
 
         with st.chat_message("assistant"):
             with st.spinner("Thinking..."):
-                response = user_input(prompt)
-                full_response = response["output_text"]
-
-                if response["is_code"]:
-                    st.markdown("### Code Block:")
-                    st.code(full_response, language="python")
-                    st.download_button(
-                        label="Copy Code",
-                        data=full_response,
-                        file_name="code_snippet.py",
-                        mime="text/plain"
-                    )
+                if vector_store is None:
+                    general_prompt = f"Question: {prompt}\n\nAnswer as accurately as possible:"
+                    general_response = query_grok(general_prompt, max_tokens=10000, temperature=0.0)
+                    response = {"output_text": general_response}
                 else:
-                    st.markdown(full_response)
+                    response = user_input(prompt, vector_store, st.session_state.chat_history, threshold=0.7)
+                
+                st.markdown(response["output_text"])
+                st.session_state.chat_history.append({"role": "assistant", "content": response["output_text"]})
 
-        st.session_state.messages.append({"role": "assistant", "content": full_response})
+        st.session_state.messages.append({"role": "assistant", "content": response["output_text"]})
 
 
 if __name__ == "__main__":
